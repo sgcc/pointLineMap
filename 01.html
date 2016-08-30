@@ -1,0 +1,447 @@
+<!--
+参考：
+http://bl.ocks.org/mbostock/4342190
+增加点
+http://bl.ocks.org/mbostock/3902569
+-->
+
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Spline Editor</title>
+<style>
+
+    body {
+        font: 13px sans-serif;
+        position: relative;
+        width: 960px;
+        height: 500px;
+    }
+
+    form {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+    }
+
+
+    circle,
+    .line {
+        fill: none;
+        stroke: steelblue;
+        stroke-width: 3px;
+    }
+
+    .dcline {
+        fill: none;
+        stroke: steelblue;
+        stroke-width: 3px;
+    }
+
+    .selectDcline {
+        fill: none;
+        stroke: steelblue;
+        stroke-width: 3px;
+        stroke-dasharray: "10 5";
+    }
+
+    circle {
+        fill: #fff;
+        fill-opacity: .2;
+        cursor: move;
+        stroke-width: 1px;
+    }
+
+
+
+    .selected {
+        fill: #ff7f0e;
+        stroke: #ff7f0e;
+    }
+
+</style>
+<form>
+    <input type='button' class='btn-text' id ='gis_del'  value='删除' />
+    <input type='button' class='btn-text' id ='gis_edit' value='编辑' />
+    <input type='button' class='btn-text' id ='draw_line' value='绘线' />
+    <input type='button' class='btn-text' id ='draw_station' value='绘站' />
+</form>
+<script src="lib/d3.v4.min.js"></script>
+<script src="lib/jquery-1.9.1.js"></script>
+<script src="lib/bpa.path.js"></script>
+
+<script>
+
+    var width = 960,
+            height = 500;
+
+    //初始化 测试数据
+    var gisEdit = {
+        points          :[]         ,//新线路的拐点
+        dragged         :null       ,//拖动的拐点
+        selected        :null       ,//选中的拐点
+        isMouseOnLine   :false      ,//鼠标在线上-插入点使用
+        currentSelectEqu:null        //当前选中的对象
+    };
+
+
+    //当前的地图数据
+    var currentMapDate  = {
+        line      :[],
+        station   :[]
+    };
+
+    currentMapDate.station.push({id:"a",p:[118,166]});
+    currentMapDate.station.push({id:"b",p:[158,148]});
+    currentMapDate.station.push({id:"c",p:[352,308]});
+
+    currentMapDate.line.push({id:"ab",p:[ [118,166],[120,108],[158,148] ]});
+    currentMapDate.line.push({id:"ac",p:[ [158,148],[379,348],[352,308] ]});
+
+    var line = d3.line();
+
+    var svg = d3.select("body").append("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .attr("tabindex", 1)
+            .on("mousedown", mousedown);
+
+    //拐点层
+    var elbowLayer      = svg.append("g").attr("class","elbow");
+    var stationLayer    = svg.append("g").attr("class","station");
+    var lineLayer       = svg.append("g").attr("class","dcline");
+
+    lineLayer = svg.append("path")
+            .datum(gisEdit.points)
+            .attr("class", "line")
+            .call(redraw);
+
+    d3.select(window)
+            .on("mousemove", mousemove)
+            .on("mouseup", mouseup)
+            .on("keydown", keydown);
+
+
+    svg.node().focus();
+
+    var gisModel = {
+        isGisEdit: false,//线路编辑状态
+        isDrawingLine: false,//绘制线路
+        isDrawStation: false,       //绘制厂站
+
+        drawStation:function () {
+            return  this.isGisEdit && this.isDrawStation
+        },
+        changeButtonStyle:function () {
+            d3.select("#gis_edit").style("background",this.isGisEdit? "#69F":null);
+            d3.select("#draw_line").style("background",this.isDrawingLine? "#69F":null);
+            d3.select("#draw_station").style("background",this.isDrawStation? "#69F":null);
+        }
+
+
+    };
+
+
+
+
+
+    //开启地图编辑
+    $("#gis_edit").click(function(){
+        //removeHotPoint();
+        if(gisModel.isGisEdit){
+
+            gisModel.isGisEdit = false;
+            gisModel.isDrawingLine = false;
+            gisModel.isDrawStation = false;
+
+            elbowLayer.selectAll("circle").remove();
+
+
+        }else {
+            gisModel.isGisEdit = true;
+        }
+
+        gisModel.changeButtonStyle();
+
+    });
+
+
+    //绘制线路开关
+    $("#draw_line").click(function(){
+
+        if(!gisModel.isGisEdit) return;
+
+        if(gisModel.isDrawingLine){
+            gisModel.isDrawingLine = false;
+        }else {
+            gisModel.isDrawingLine = true;
+            gisModel.isDrawStation =false;
+        }
+
+        gisModel.changeButtonStyle();
+
+    });
+
+    //绘制线路开关
+    $("#draw_station").click(function(){
+
+
+        if(!gisModel.isGisEdit) return;
+
+        if(gisModel.isDrawStation){
+            gisModel.isDrawStation = false;
+        }else {
+            gisModel.isDrawStation = true;
+            gisModel.isDrawingLine = false;
+        }
+
+        gisModel.changeButtonStyle();
+
+    });
+
+
+
+
+
+
+    //删除线路
+    $("#gis_del").click(function(){
+
+        gisEdit.points = [];
+        redraw();
+
+    });
+
+
+
+
+    //点击线路，开启编辑模式
+    function lineOnClick() {
+        if(gisModel.isGisEdit){
+
+            //设置样式
+            var cp = d3.select(this);
+            cp.style("stroke-dasharray","10 5")
+
+            //设置拐点
+            var ps = cp._groups[0][0].__data__;  //??如何获取??
+            gisEdit.points = ps.p;
+            drawHotPoint();
+        }
+    }
+
+    //绘制线路拖动点
+    function  drawHotPoint() {
+        elbowLayer.selectAll("circle")
+                .data(gisEdit.points)
+                .enter().append("circle")
+                .on("mousedown", function(d) { gisEdit.selected = gisEdit.dragged = d; redraw(); })
+                .attr("r", 6.5)
+                .style("visibility",function(d,i){
+                    var pointL = gisEdit.points.length -1;
+                    if(i === 0 || i === pointL){
+                        return  "hidden";
+                    }else{
+                        return "visible";
+                    }
+                })
+                .attr("cx", function(d) { return d[0]; })
+                .attr("cy", function(d) { return d[1]; });
+    }
+
+    //重新绘制折线
+    function redraw() {
+
+        drawEditLine();
+        drawElbowCircle();
+        drawStation();
+        drawLine();
+
+        if (d3.event) {
+            d3.event.preventDefault();
+            d3.event.stopPropagation();
+        }
+    };
+    
+    function drawLine() {
+
+        lineLayer.selectAll("path")
+                .data(currentMapDate.line)
+                .enter()
+                .append("path")
+                .attr("class", "dcline")
+                .attr("d", function (d,i) {
+                    return line(d.p);
+                })
+                .on("click", lineOnClick)
+                .on("mouseover", function(d,i) {
+                    d3.select(this).style("stroke-width",3)
+                    gisEdit.isMouseOnLine = true
+                })
+                .on("mouseout", function(d,i) {
+                    d3.select(this).style("stroke-width",2)
+                    gisEdit.isMouseOnLine = false
+                });
+
+    };
+
+
+
+    //鼠标点击--增加一个新热点
+    function mousedown() {
+
+        //编辑下，绘制厂站
+        if(gisModel.drawStation()){
+
+            var ap = d3.mouse(svg.node());
+            var newId = "station" + currentMapDate.station.length;
+            currentMapDate.station.push({id:newId,p:ap});
+
+            redraw();
+            return;
+        }
+
+
+        //没有开启编辑
+        if(!gisModel.isDrawingLine) return;
+
+        //鼠标没有在线上
+        if(gisEdit.isMouseOnLine){
+            var ap = d3.mouse(svg.node());
+            insertElbow(gisEdit.points,ap);
+            gisEdit.selected = gisEdit.dragged = ap;
+        }
+        else{
+            gisEdit.points.push(gisEdit.selected = gisEdit.dragged = d3.mouse(svg.node()));
+        }
+
+
+        redraw();
+    }
+
+    //鼠标移动--拖动热点
+    function mousemove() {
+        if (!gisEdit.dragged) return;
+        var m = d3.mouse(svg.node());
+        gisEdit.dragged[0] = Math.max(0, Math.min(width, m[0]));
+        gisEdit.dragged[1] = Math.max(0, Math.min(height, m[1]));
+        redraw();
+    }
+
+    //鼠标抬起-停止移动
+    function mouseup() {
+        if (!gisEdit.dragged) return;
+        mousemove();
+        gisEdit.dragged = null;
+    }
+
+    //处理键盘事件
+    function keydown() {
+        if (!gisEdit.selected) return;
+        switch (d3.event.keyCode) {
+            case 8: // backspace
+            case 46: { // delete
+                var i = gisEdit.points.indexOf(gisEdit.selected);
+                gisEdit.points.splice(i, 1);
+                gisEdit.selected = gisEdit.points.length ? gisEdit.points[i > 0 ? i - 1 : 0] : null;
+                redraw();
+                break;
+            }
+        }
+    }//--keydown
+    
+    
+
+    //绘制编辑点
+function  drawElbowCircle() {
+    var elbowCircle = elbowLayer.selectAll("circle")
+            .data(gisEdit.points, function(d) { return d; });
+
+    elbowCircle.enter().append("circle")
+            .on("mousedown", function(d) { gisEdit.selected = gisEdit.dragged = d; redraw(); })
+            .attr("r", 6.5);
+
+    elbowCircle
+            .attr("cx", function(d) { return d[0]; })
+            .attr("cy", function(d) { return d[1]; });
+
+    elbowCircle
+            .classed("selected", function(d) { return d === gisEdit.selected; });
+
+    elbowCircle.exit().remove();
+}//-drawElbowCircle
+
+function  drawEditLine() {
+    gisEdit.currentSelectEqu = svg.select("path")
+            .attr("d", function (d,i) {
+                return line(gisEdit.points);
+            })
+            .style("stroke-dasharray","10 5")
+            .on("click", lineOnClick)
+            .on("mouseover", function(d,i) {
+                d3.select(this).style("stroke-width",3)
+                gisEdit.isMouseOnLine = true
+            })
+            .on("mouseout", function(d,i) {
+                d3.select(this).style("stroke-width",2)
+                gisEdit.isMouseOnLine = false
+            });
+}//-drawEditLine
+
+    function dragstarted(d) {
+        d3.select(this).raise().classed("selected", true);
+    }
+
+    function dragged(d) {
+
+        if(!gisModel.isGisEdit) return;
+
+        d3.select(this)
+                .attr("cx", d.p[0] = d3.event.x)
+                .attr("cy", d.p[1] = d3.event.y);
+    }
+
+    function dragended(d) {
+        d3.select(this)
+                .classed("selected", false);
+    }
+
+    function drawStation() {
+        var station = stationLayer.selectAll("circle")
+                .data(currentMapDate.station);
+
+        station.enter().append("circle")
+                .attr("cx", function(d) {
+                    return d.p[0]; })
+                .attr("cy", function(d) {
+                    return d.p[1]; })
+                .attr("r", 15)
+                .call(d3.drag()
+                        .on("start", dragstarted)
+                        .on("drag", dragged)
+                        .on("end", dragended)
+                )
+                .on("mouseover", function(d,i) {
+                    d3.select(this).classed("selected",true);
+//                    gisEdit.isMouseOnLine = true
+                })
+                .on("mouseout", function(d,i) {
+                    d3.select(this).classed("selected",false);
+//                    gisEdit.isMouseOnLine = false
+                });
+
+        station
+                .attr("cx", function(d) {
+                    return d.p[0]; })
+                .attr("cy", function(d) {
+                    return d.p[1]; });
+
+        station.exit().remove();
+
+    }
+
+
+
+
+
+
+</script>
